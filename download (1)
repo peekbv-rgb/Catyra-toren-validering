@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Notebooks
+.ipynb_checkpoints/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Lokale data (voorbeelddata demo_data.xlsx wordt WEL meegeleverd)
+*.csv
+!demo_data.csv
+greenhousedata*.xlsx
+weerbericht*.csv
+historisch*.csv
+
+# Logs / tijdelijk
+*.log
+tmp/
