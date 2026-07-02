@@ -39,11 +39,30 @@ class TowerConfig:
     C_discharge: float = 0.61     # - discharge coefficient (validated 3.5m production tower)
     W_supply: float = 100.0       # L/hr - water supply to nozzles
     V_dot_evap_max: float = 25.0  # L/hr - MAX actual evaporation (physics-limited!)
+    D_venturi: float = 0.95       # m - venturi/keeldiameter (referentie gevalideerde 3.5m toren)
+
+    # Referentie-keel waarop de gevalideerde C=0.61 is geijkt (Technical Briefing dec 2025)
+    D_VENTURI_REF: float = 0.95
 
     @property
     def A_bottom(self) -> float:
         """Outlet area [m²]."""
         return np.pi * (self.D_bottom / 2) ** 2
+
+    @property
+    def venturi_factor(self) -> float:
+        """Venturi-correctie op het debiet, genormaliseerd op de gevalideerde keel (0.95 m).
+
+        f = (D_venturi / D_VENTURI_REF)^2. Bij de gevalideerde keel is f = 1, zodat de
+        gevalideerde prestatie exact reproduceerbaar blijft (geen dubbeltelling met C).
+        """
+        ref = self.D_VENTURI_REF if self.D_VENTURI_REF > 0 else 0.95
+        return (self.D_venturi / ref) ** 2
+
+    @property
+    def A_eff(self) -> float:
+        """Effectieve doorstroomoppervlak voor debiet/verdamping [m²] (venturi-gecorrigeerd)."""
+        return self.A_bottom * self.venturi_factor
 
 
 @dataclass
@@ -225,8 +244,8 @@ def calc_tower_performance(T_amb: float, RH_amb: float,
     # Outlet velocity
     V_out = calc_tower_velocity(T_amb, T_out, tower.H_tower, tower.C_discharge)
 
-    # Mass flow rate
-    m_dot = RHO_AIR * V_out * tower.A_bottom  # kg/s
+    # Mass flow rate (venturi-gecorrigeerd effectief oppervlak)
+    m_dot = RHO_AIR * V_out * tower.A_eff  # kg/s
 
     # Volume flow rate
     V_dot = m_dot / RHO_AIR * 3600  # m³/hr
