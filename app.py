@@ -479,6 +479,13 @@ def calc_tower_perf(T_amb, RH_amb, H_tower: float = 3.5, C_discharge: float = 0.
     delta_w = np.maximum(w_sat - w_amb, 0.0)
     evap = np.minimum(m_dot * delta_w * 3600.0, evap_max)        # L/hr
 
+    # Werkelijke vochtopname op basis van (begrensde) verdamping -> uitblaascondities
+    with np.errstate(divide='ignore', invalid='ignore'):
+        w_pickup = np.where(m_dot > 0, evap / (m_dot * 3600.0), 0.0)  # kg/kg
+    w_out = w_amb + w_pickup
+    e_out = w_out * P_atm / (0.622 + w_out)
+    RH_out = np.clip(100.0 * e_out / e_sat_out, 0.0, 100.0)      # % (verzadigd -> ~100)
+
     # Koelvermogen uit verdamping
     L_vap = 2.45e6                                               # J/kg
     cooling_kW = evap / 3600.0 * L_vap / 1000.0                  # kW
@@ -487,6 +494,7 @@ def calc_tower_perf(T_amb, RH_amb, H_tower: float = 3.5, C_discharge: float = 0.
         'T_wb': T_wb, 'T_out': T_out, 'dT': dT,
         'V_out': V_out, 'A_outlet': A_outlet, 'm_dot': m_dot,
         'V_dot_s': V_dot_s, 'V_dot_hr': V_dot_hr,
+        'RH_out': RH_out, 'w_amb': w_amb, 'w_out': w_out,
         'evap': evap, 'cooling_kW': cooling_kW,
     }
 
@@ -2224,83 +2232,108 @@ def main():
     # ==========================================================================
     with main_tab3:
         st.markdown("### 🗼 Toren-performance")
-        st.caption("Losse berekening van de prestatie per toren op basis van de instellingen in de sidebar. "
-                   "De luchthoeveelheid volgt uit het schoorsteeneffect: verdampingskoeling maakt de kaslucht "
-                   "in de toren zwaarder, waardoor die naar buiten zakt.")
+        st.caption("De **luchthoeveelheid per toren** is de belangrijkste prestatiemaat. Stel hieronder de "
+                   "afmetingen, het aantal torens en de omgeving in — deze pagina rekent los van de simulatie, "
+                   "dus je kunt vrij variëren zonder de sidebar te wijzigen.")
 
-        A_outlet = float(np.pi * (tower_d / 2) ** 2)
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Aantal torens", f"{n_towers}")
-        c2.metric("Hoogte", f"{tower_height:.2f} m")
-        c3.metric("Diameter", f"{tower_d:.2f} m")
-        c4.metric("Uitlaatopp.", f"{A_outlet:.2f} m²")
-        c5.metric("C_discharge", f"{tower_c:.2f}")
+        st.markdown("#### ⚙️ Torenafmetingen")
+        p1, p2, p3 = st.columns(3)
+        with p1:
+            perf_n = st.number_input("Aantal torens", min_value=1, max_value=200,
+                                     value=int(n_towers), step=1, key="perf_n")
+            perf_H = st.number_input("Hoogte (m)", min_value=1.0, max_value=8.0,
+                                     value=float(tower_height), step=0.1, key="perf_H")
+        with p2:
+            perf_D = st.number_input("Diameter (m)", min_value=0.3, max_value=3.0,
+                                     value=float(tower_d), step=0.1, key="perf_D")
+            perf_C = st.number_input("C_discharge", min_value=0.30, max_value=0.90,
+                                     value=float(tower_c), step=0.01, key="perf_C")
+        with p3:
+            perf_evap = st.number_input("Max Evap (L/hr)", min_value=5.0, max_value=80.0,
+                                        value=float(tower_evap), step=1.0, key="perf_evap")
+        A_outlet = float(np.pi * (perf_D / 2) ** 2)
+        st.caption(f"Uitlaatoppervlak  A = π·(D/2)² = **{A_outlet:.3f} m²**")
 
-        st.markdown("#### Omgevingscondities")
+        st.markdown("#### 🌤️ Inblaascondities (omgeving)")
         oc1, oc2 = st.columns(2)
         with oc1:
             perf_T = st.slider("Buitentemperatuur (°C)", 15.0, 40.0, 30.0, 0.5, key="perf_T")
         with oc2:
             perf_RH = st.slider("Relatieve vochtigheid (%)", 20.0, 90.0, 50.0, 1.0, key="perf_RH")
 
-        perf = calc_tower_perf(perf_T, perf_RH, H_tower=tower_height,
-                               C_discharge=tower_c, D_bottom=tower_d, evap_max=tower_evap)
+        perf = calc_tower_perf(perf_T, perf_RH, H_tower=perf_H,
+                               C_discharge=perf_C, D_bottom=perf_D, evap_max=perf_evap)
         Vdot_hr = float(perf['V_dot_hr'])
         Vdot_s = float(perf['V_dot_s'])
         Vout = float(perf['V_out'])
-        total_hr = Vdot_hr * n_towers
+        total_hr = Vdot_hr * perf_n
 
-        st.markdown("#### 💨 Luchthoeveelheid")
+        # ---- Belangrijkste maat: luchthoeveelheid per toren ----
+        st.markdown("#### 💨 Luchthoeveelheid per toren")
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Per toren", f"{Vdot_hr:,.0f} m³/hr", help="V̇ = V_uit × A_uitlaat × 3600")
-        m2.metric("Per toren", f"{Vdot_s:,.1f} m³/s")
+        m2.metric("Per toren", f"{Vdot_s:,.2f} m³/s")
         m3.metric("Uitlaatsnelheid", f"{Vout:.2f} m/s")
-        m4.metric(f"Totaal ({n_towers} torens)", f"{total_hr:,.0f} m³/hr")
+        m4.metric(f"Totaal ({perf_n} torens)", f"{total_hr:,.0f} m³/hr")
 
         gh_vol = getattr(greenhouse, 'volume', greenhouse.A_floor * getattr(greenhouse, 'H_roof', 4.2))
         ach = total_hr / gh_vol if gh_vol > 0 else 0
         st.caption(f"Kasvolume ≈ {gh_vol:,.0f} m³ → **{ach:.2f} luchtwisselingen per uur** met alle torens samen.")
 
-        st.markdown("#### 🌡️ Thermische prestatie")
-        t1, t2, t3, t4 = st.columns(4)
-        t1.metric("Natteboltemp.", f"{float(perf['T_wb']):.1f} °C")
-        t2.metric("Uitlaattemp.", f"{float(perf['T_out']):.1f} °C")
-        t3.metric("ΔT (koeling)", f"{float(perf['dT']):.1f} °C")
-        t4.metric("Massastroom", f"{float(perf['m_dot']):.2f} kg/s")
+        # ---- Uitblaascondities ----
+        st.markdown("#### 🌬️ Uitblaascondities (uit de toren)")
+        u1, u2, u3, u4 = st.columns(4)
+        u1.metric("Luchthoeveelheid", f"{Vdot_hr:,.0f} m³/hr")
+        u2.metric("Uitblaastemperatuur", f"{float(perf['T_out']):.1f} °C",
+                  delta=f"{-float(perf['dT']):.1f} °C", delta_color="inverse",
+                  help="Koelt af tot ~natteboltemperatuur")
+        u3.metric("Uitblaas-luchtvochtigheid", f"{float(perf['RH_out']):.0f} %",
+                  help="Lucht verlaat de toren (nagenoeg) verzadigd")
+        u4.metric("Massastroom", f"{float(perf['m_dot']):.2f} kg/s")
 
-        e1, e2 = st.columns(2)
-        e1.metric("Verdamping / toren", f"{float(perf['evap']):.1f} L/hr")
-        e2.metric("Koelvermogen / toren", f"{float(perf['cooling_kW']):.1f} kW")
+        st.caption(
+            f"Inblaas: {perf_T:.1f} °C / {perf_RH:.0f} %RV  →  "
+            f"Uitblaas: {float(perf['T_out']):.1f} °C / {float(perf['RH_out']):.0f} %RV  "
+            f"(ΔT = {float(perf['dT']):.1f} °C afkoeling)"
+        )
 
+        st.markdown("#### 🌡️ Overige prestatie")
+        e1, e2, e3 = st.columns(3)
+        e1.metric("Natteboltemp.", f"{float(perf['T_wb']):.1f} °C")
+        e2.metric("Verdamping / toren", f"{float(perf['evap']):.1f} L/hr")
+        e3.metric("Koelvermogen / toren", f"{float(perf['cooling_kW']):.1f} kW")
+
+        # ---- Grafiek ----
         st.markdown("#### 📈 Luchthoeveelheid per toren vs. buitentemperatuur")
         T_range = np.linspace(15, 40, 60)
         fig, ax = plt.subplots(figsize=(9, 4.5))
         for rh in [30, 50, 70]:
             p = calc_tower_perf(T_range, np.full_like(T_range, rh),
-                                H_tower=tower_height, C_discharge=tower_c,
-                                D_bottom=tower_d, evap_max=tower_evap)
+                                H_tower=perf_H, C_discharge=perf_C,
+                                D_bottom=perf_D, evap_max=perf_evap)
             ax.plot(T_range, p['V_dot_hr'], linewidth=2, label=f"RH {rh}%")
         ax.axvline(perf_T, color='gray', ls='--', alpha=0.6)
         ax.set_xlabel("Buitentemperatuur (°C)")
         ax.set_ylabel("Luchthoeveelheid per toren (m³/hr)")
-        ax.set_title(f"{tower_height:.1f} m hoog · Ø {tower_d:.2f} m · C = {tower_c:.2f}")
+        ax.set_title(f"{perf_H:.1f} m hoog · Ø {perf_D:.2f} m · C = {perf_C:.2f}")
         ax.legend(title="Rel. vocht")
         ax.grid(alpha=0.3)
         st.pyplot(fig)
         plt.close()
 
+        # ---- Tabel ----
         st.markdown("#### 📋 Tabel (bij ingestelde relatieve vochtigheid)")
         T_tab = np.arange(20, 39, 2.0)
         p_tab = calc_tower_perf(T_tab, np.full_like(T_tab, perf_RH),
-                                H_tower=tower_height, C_discharge=tower_c,
-                                D_bottom=tower_d, evap_max=tower_evap)
+                                H_tower=perf_H, C_discharge=perf_C,
+                                D_bottom=perf_D, evap_max=perf_evap)
         tbl = pd.DataFrame({
-            "T buiten (°C)": T_tab,
-            "T natbol (°C)": np.round(p_tab['T_wb'], 1),
-            "ΔT (°C)": np.round(p_tab['dT'], 1),
+            "T inblaas (°C)": T_tab,
+            "T uitblaas (°C)": np.round(p_tab['T_out'], 1),
+            "RV uitblaas (%)": np.round(p_tab['RH_out'], 0),
             "V_uit (m/s)": np.round(p_tab['V_out'], 2),
             "Lucht/toren (m³/hr)": np.round(p_tab['V_dot_hr'], 0),
-            f"Totaal {n_towers} torens (m³/hr)": np.round(p_tab['V_dot_hr'] * n_towers, 0),
+            f"Totaal {perf_n} torens (m³/hr)": np.round(p_tab['V_dot_hr'] * perf_n, 0),
             "Verdamping (L/hr)": np.round(p_tab['evap'], 1),
         })
         st.dataframe(tbl, use_container_width=True, hide_index=True)
@@ -2310,7 +2343,9 @@ def main():
 - **Uitlaatsnelheid (schoorsteeneffect):** $V_{uit} = C \cdot \sqrt{\dfrac{2\,g\,H\,\Delta T}{T_{amb,K}}}$
 - **Uitlaatoppervlak:** $A = \pi (D/2)^2$
 - **Luchthoeveelheid per toren:** $\dot V = V_{uit}\cdot A \cdot 3600$  [m³/hr]
-- **ΔT** = buitentemperatuur − natteboltemperatuur (Stull), want de uitlaat koelt af tot ~natboltemperatuur.
+- **ΔT** = inblaastemperatuur − uitblaastemperatuur; de uitblaas koelt af tot ~natteboltemperatuur (Stull).
+- **Uitblaas-luchtvochtigheid** volgt uit de vochtopname (verdamping / luchtmassastroom); bij niet-begrensde
+  verdamping is de uitblaas verzadigd (≈100 %RV).
 - **Massastroom:** $\dot m = \rho_{lucht}\cdot V_{uit}\cdot A$, met $\rho_{lucht} = 1{,}2$ kg/m³.
 - **Verdamping:** $\dot m \cdot \Delta w \cdot 3600$, begrensd op *Max Evap*.
 
