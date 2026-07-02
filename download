@@ -1,9 +1,1 @@
-[server]
-headless = true
-enableCORS = false
-
-[browser]
-gatherUsageStats = false
-
-[theme]
-primaryColor = "#1E3A5F"
+3.11.9

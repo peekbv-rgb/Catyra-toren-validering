@@ -19,6 +19,7 @@ Ontwikkeld door **Catyra Engineering** · versie 2.0 (2026)
 ## Functionaliteit
 
 - **Twee hoofdtabs:** Jaaranalyse en Weerbericht (7-daags met torensimulatie).
+- **Tab Toren-performance:** losse berekening van de prestatie per toren — met name de **luchthoeveelheid** (m³/hr) uit het schoorsteeneffect, plus uitlaatsnelheid, ΔT, verdamping, koelvermogen en luchtwisselingen; met grafiek en tabel over een temperatuurbereik.
 - **Analyses in de Jaaranalyse:** Hot Day, Annual, Damage, Production, Temperature, DIF, Economic en Export.
 - **Torenbesturing** op basis van VD (vochtdeficiet) met hysterese en dakraam-regeling met buiten-RV-bescherming.
 - **Historische VD-percentielen** uit meerjarige data.
