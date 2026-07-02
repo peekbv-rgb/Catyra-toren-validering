@@ -825,7 +825,8 @@ def run_simplified_simulation(df, n_towers, tower, control, greenhouse, mixing):
             if delta_T > 0.5:
                 V = tower.C_discharge * np.sqrt(2 * g * tower.H_tower * delta_T / (T_in + 273.15))
                 V = min(V, 3.0)
-                A = np.pi * (tower.D_top / 2) ** 2
+                f_venturi = (getattr(tower, 'D_venturi', 0.95) / 0.95) ** 2  # opvatting B, genormaliseerd
+                A = np.pi * (tower.D_top / 2) ** 2 * f_venturi
                 m_dot = 1.2 * V * A
 
                 w_in = 0.622 * (e_sat * RH_in / 100) / (101.325 - e_sat * RH_in / 100)
@@ -1751,11 +1752,15 @@ def main():
         with col2:
             tower_d = st.number_input("Diameter (m)", value=1.0, min_value=0.5, max_value=2.0, step=0.1)
             tower_evap = st.number_input("Max Evap (L/hr)", value=25, min_value=10, max_value=50)
+        tower_venturi = st.number_input("Venturi / keeldiameter (m)", value=0.95, min_value=0.30, max_value=2.0, step=0.05,
+                                        help="Stuurt het debiet aan (opvatting B). Genormaliseerd op de gevalideerde 0,95 m; "
+                                             "op 0,95 m verandert er niets t.o.v. de gevalideerde simulatie.")
 
         tower = TowerConfig(H_tower=tower_height, D_top=tower_d, D_bottom=tower_d,
-                           C_discharge=tower_c, V_dot_evap_max=tower_evap) if USE_FULL_MODEL else \
+                           C_discharge=tower_c, V_dot_evap_max=tower_evap, D_venturi=tower_venturi) if USE_FULL_MODEL else \
             type('Tower', (), {'H_tower': tower_height, 'D_top': tower_d, 'D_bottom': tower_d,
-                              'C_discharge': tower_c, 'V_dot_evap_max': tower_evap, 'H_discharge': 0.5, 'W_supply': 100})()
+                              'C_discharge': tower_c, 'V_dot_evap_max': tower_evap, 'H_discharge': 0.5,
+                              'W_supply': 100, 'D_venturi': tower_venturi})()
 
         st.markdown("---")
 
@@ -2149,7 +2154,7 @@ def main():
                     fc_sim_df.loc[mask, 'RH_inside'] = rh_new[mask].round(1)
 
             # Cache key based on scenario + all model settings
-            settings_hash = (f"{scenario_key}_{is_greenhouse}_{n_towers}_{tower.H_tower}_{tower.D_bottom}_{tower.C_discharge}_{tower.V_dot_evap_max}"
+            settings_hash = (f"{scenario_key}_{is_greenhouse}_{n_towers}_{tower.H_tower}_{tower.D_bottom}_{tower.C_discharge}_{tower.V_dot_evap_max}_{getattr(tower, 'D_venturi', 0.95)}"
                              f"_{control.VD_tower_on}_{control.VD_tower_off}_{control.hour_start}_{control.hour_end}"
                              f"_{mixing.stratification}_{mixing.ACH_ref}_{mixing.eta_mix}_{mixing.height_factor}_{mixing.eta_temp}_{mixing.eta_rh}"
                              f"_{crop.VD_optimal}_{crop.VD_stress}")
@@ -2246,11 +2251,20 @@ def main():
         with p2:
             perf_D = st.number_input("Diameter (m)", min_value=0.3, max_value=3.0,
                                      value=float(tower_d), step=0.1, key="perf_D")
-            perf_C = st.number_input("C_discharge", min_value=0.30, max_value=0.90,
-                                     value=float(tower_c), step=0.01, key="perf_C")
+            perf_nozzle = st.selectbox("Nozzle → C_discharge (gevalideerd)",
+                                       ["Foggy — C = 0,61", "Gardena — C = 0,56", "Handmatig"],
+                                       key="perf_nozzle",
+                                       help="Gevalideerde afvoercoëfficiënt uit de Technical Briefing (dec 2025).")
         with p3:
             perf_evap = st.number_input("Max Evap (L/hr)", min_value=5.0, max_value=80.0,
                                         value=float(tower_evap), step=1.0, key="perf_evap")
+            if perf_nozzle.startswith("Foggy"):
+                perf_C = 0.61
+            elif perf_nozzle.startswith("Gardena"):
+                perf_C = 0.56
+            else:
+                perf_C = st.number_input("C_discharge (handmatig)", min_value=0.30, max_value=0.90,
+                                         value=float(tower_c), step=0.01, key="perf_C")
         A_outlet = float(np.pi * (perf_D / 2) ** 2)
         st.caption(f"Uitlaatoppervlak  A = π·(D/2)² = **{A_outlet:.3f} m²**")
 
@@ -2279,6 +2293,40 @@ def main():
         gh_vol = getattr(greenhouse, 'volume', greenhouse.A_floor * getattr(greenhouse, 'H_roof', 4.2))
         ach = total_hr / gh_vol if gh_vol > 0 else 0
         st.caption(f"Kasvolume ≈ {gh_vol:,.0f} m³ → **{ach:.2f} luchtwisselingen per uur** met alle torens samen.")
+
+        # ---- Venturi (keel) ----
+        st.markdown("#### 🌀 Venturi (keel)")
+        perf_venturi = st.number_input("Venturi-/keeldiameter (m)", min_value=0.05, max_value=3.0,
+                                       value=float(tower_venturi), step=0.01, key="perf_venturi",
+                                       help="Zelfde parameter als in de sidebar. Standaard de gevalideerde 0,95 m.")
+        A_keel = float(np.pi * (perf_venturi / 2) ** 2)
+        ratio = perf_venturi / perf_D if perf_D > 0 else 0
+        f_venturi = (perf_venturi / 0.95) ** 2
+        st.caption(f"Keeloppervlak A_keel = π·(D_keel/2)² = **{A_keel:.3f} m²**  ·  keel/uitlaat = {ratio:.2f}×  ·  "
+                   f"venturi-factor (t.o.v. 0,95 m) = {f_venturi:.2f}")
+        st.caption("ℹ️ De simulatie gebruikt nu **opvatting B, gecorrigeerd**: het debiet schaalt met (D_keel / 0,95 m)². "
+                   "Op 0,95 m is de factor 1, zodat de gevalideerde prestatie (C = 0,61 op de uitlaatdiameter) exact "
+                   "behouden blijft — geen dubbeltelling. Buiten 0,95 m is het een extrapolatie (geen meetdata).")
+
+        V_keel_cont = Vdot_s / A_keel if A_keel > 0 else 0.0      # continuïteit: hogere snelheid, debiet gelijk
+        Vdot_keel_hr = Vout * A_keel * 3600.0                    # ruwe opvatting B
+        Vdot_sim_hr = Vdot_hr * f_venturi                        # zoals de simulatie (gecorrigeerd op 0,95 m)
+        total_sim_hr = Vdot_sim_hr * perf_n
+
+        vc1, vc2, vc3 = st.columns(3)
+        with vc1:
+            st.markdown("**A — continuïteit**")
+            st.metric("Keelsnelheid", f"{V_keel_cont:.2f} m/s", help="V_keel = V̇ / A_keel")
+            st.metric("Debiet / toren", f"{Vdot_hr:,.0f} m³/hr")
+        with vc2:
+            st.markdown("**B — ruw (keel × V_uit)**")
+            st.metric("Debiet / toren", f"{Vdot_keel_hr:,.0f} m³/hr", help="V̇ = V_uit × A_keel")
+            st.caption("Alleen ter vergelijking")
+        with vc3:
+            st.markdown("**C — zoals de simulatie** ✅")
+            st.metric("Debiet / toren", f"{Vdot_sim_hr:,.0f} m³/hr", help="V̇ = gevalideerd debiet × (D_keel/0,95)²")
+            st.metric(f"Totaal ({perf_n} torens)", f"{total_sim_hr:,.0f} m³/hr")
+        st.caption("In de simulatie schalen verdamping en koeling evenredig met dit gecorrigeerde debiet mee.")
 
         # ---- Uitblaascondities ----
         st.markdown("#### 🌬️ Uitblaascondities (uit de toren)")
@@ -2348,8 +2396,46 @@ def main():
   verdamping is de uitblaas verzadigd (≈100 %RV).
 - **Massastroom:** $\dot m = \rho_{lucht}\cdot V_{uit}\cdot A$, met $\rho_{lucht} = 1{,}2$ kg/m³.
 - **Verdamping:** $\dot m \cdot \Delta w \cdot 3600$, begrensd op *Max Evap*.
+- **Venturi — opvatting A (continuïteit):** debiet gelijk, keelsnelheid $V_{keel} = \dot V / A_{keel}$.
+- **Venturi — opvatting B (keel bepaalt debiet):** $\dot V = V_{uit}\cdot A_{keel}$, met $A_{keel}=\pi(D_{keel}/2)^2$.
 
 Exact dezelfde fysica als in `greenhouse_climate_v2.py`.
+""")
+
+        with st.expander("📐 Gevalideerde referentiedata (Technical Briefing, dec 2025)"):
+            st.markdown("**Model vs. briefing — 3,5 m toren (Ø 1,2 m, Foggy C = 0,61)**")
+            _cond = [("Dutch summer", 31, 40, 0.91, 21),
+                     ("Hot greenhouse", 35, 20, 1.15, 19),
+                     ("Desert (Sinai)", 45, 10, 1.40, 21)]
+            _rows = []
+            for nm, T, RH, Vb, Tb in _cond:
+                _p = calc_tower_perf(T, RH, H_tower=3.5, C_discharge=0.61, D_bottom=1.2, evap_max=100)
+                _rows.append({
+                    "Conditie": nm, "T_in (°C)": T, "RH (%)": RH,
+                    "V model (m/s)": round(float(_p['V_out']), 2), "V briefing (m/s)": Vb,
+                    "T_out model (°C)": round(float(_p['T_out']), 1), "T_out briefing (°C)": Tb,
+                    "Lucht model (m³/hr)": round(float(_p['V_dot_hr']), 0),
+                })
+            st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
+            st.caption("Het model reproduceert de voorspelde uitlaatsnelheid binnen ~1 %.")
+
+            st.markdown("**Gemeten 2 m-toren (Ø 0,68 m) — steady-state (>15 min)**")
+            st.dataframe(pd.DataFrame([
+                {"Test": "Longrun 1", "Nozzle": "4× Foggy", "T_in (°C)": "28–32", "V_out (m/s)": 0.72, "RH_out (%)": 97, "C": 0.61},
+                {"Test": "Longrun 2", "Nozzle": "5× Foggy", "T_in (°C)": "27–30", "V_out (m/s)": 0.76, "RH_out (%)": 99, "C": 0.61},
+                {"Test": "Gardena", "Nozzle": "5× Gardena", "T_in (°C)": "33–35", "V_out (m/s)": 0.75, "RH_out (%)": 97, "C": 0.56},
+            ]), use_container_width=True, hide_index=True)
+
+            st.markdown("""
+**Kerncijfers uit de validatie**
+- C_discharge = **0,61 ± 0,03** (Foggy, 75+ meetpunten, σ = 3 %) · **0,56** (Gardena)
+- Uitlaat = natteboltemperatuur; verzadigingsrendement η = **97–100 %**
+- Snelheidsschaling **V ∝ √h**: 1 m→2 m gemeten 1,44× (theorie 1,41×)
+- Gevalideerd bereik: T_in 27–35 °C, RH 17–49 %
+- 3,5 m-toren: H 3,5 m · Ø 1,2 m · **venturi 0,95 m** · capaciteit 23–25 kW @ 35 °C/20 %
+- Spreiding/menging (aparte laag): η_mix = 0,23–0,34; zwaartekrachtstroom U = 0,7·√(g'·H)
+
+Bron: *CatavaAir CoolFlow Technical Briefing*, december 2025.
 """)
 
     st.markdown("---")
