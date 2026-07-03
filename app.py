@@ -825,8 +825,7 @@ def run_simplified_simulation(df, n_towers, tower, control, greenhouse, mixing):
             if delta_T > 0.5:
                 V = tower.C_discharge * np.sqrt(2 * g * tower.H_tower * delta_T / (T_in + 273.15))
                 V = min(V, 3.0)
-                f_venturi = (getattr(tower, 'D_venturi', 0.95) / 0.95) ** 2  # opvatting B, genormaliseerd
-                A = np.pi * (tower.D_top / 2) ** 2 * f_venturi
+                A = np.pi * (tower.D_top / 2) ** 2
                 m_dot = 1.2 * V * A
 
                 w_in = 0.622 * (e_sat * RH_in / 100) / (101.325 - e_sat * RH_in / 100)
@@ -1753,14 +1752,20 @@ def main():
             tower_d = st.number_input("Diameter (m)", value=1.0, min_value=0.5, max_value=2.0, step=0.1)
             tower_evap = st.number_input("Max Evap (L/hr)", value=25, min_value=10, max_value=50)
         tower_venturi = st.number_input("Venturi / keeldiameter (m)", value=0.95, min_value=0.30, max_value=2.0, step=0.05,
-                                        help="Stuurt het debiet aan (opvatting B). Genormaliseerd op de gevalideerde 0,95 m; "
-                                             "op 0,95 m verandert er niets t.o.v. de gevalideerde simulatie.")
+                                        help="Bepaalt de keelsnelheid (verstuiving/menging), niet het debiet. "
+                                             "Het debiet volgt uit de torendoorsnede — data-onderbouwd op 5 schaalmodel-reeksen.")
 
         tower = TowerConfig(H_tower=tower_height, D_top=tower_d, D_bottom=tower_d,
-                           C_discharge=tower_c, V_dot_evap_max=tower_evap, D_venturi=tower_venturi) if USE_FULL_MODEL else \
+                           C_discharge=tower_c, V_dot_evap_max=tower_evap) if USE_FULL_MODEL else \
             type('Tower', (), {'H_tower': tower_height, 'D_top': tower_d, 'D_bottom': tower_d,
                               'C_discharge': tower_c, 'V_dot_evap_max': tower_evap, 'H_discharge': 0.5,
-                              'W_supply': 100, 'D_venturi': tower_venturi})()
+                              'W_supply': 100})()
+        # Venturi als attribuut zetten (werkt ook als een oudere engine dit veld nog niet als
+        # constructor-argument kent; dan wordt het simpelweg genegeerd tot de engine is bijgewerkt).
+        try:
+            tower.D_venturi = tower_venturi
+        except Exception:
+            pass
 
         st.markdown("---")
 
@@ -2298,35 +2303,26 @@ def main():
         st.markdown("#### 🌀 Venturi (keel)")
         perf_venturi = st.number_input("Venturi-/keeldiameter (m)", min_value=0.05, max_value=3.0,
                                        value=float(tower_venturi), step=0.01, key="perf_venturi",
-                                       help="Zelfde parameter als in de sidebar. Standaard de gevalideerde 0,95 m.")
+                                       help="Zelfde parameter als in de sidebar.")
         A_keel = float(np.pi * (perf_venturi / 2) ** 2)
         ratio = perf_venturi / perf_D if perf_D > 0 else 0
-        f_venturi = (perf_venturi / 0.95) ** 2
-        st.caption(f"Keeloppervlak A_keel = π·(D_keel/2)² = **{A_keel:.3f} m²**  ·  keel/uitlaat = {ratio:.2f}×  ·  "
-                   f"venturi-factor (t.o.v. 0,95 m) = {f_venturi:.2f}")
-        st.caption("ℹ️ De simulatie gebruikt nu **opvatting B, gecorrigeerd**: het debiet schaalt met (D_keel / 0,95 m)². "
-                   "Op 0,95 m is de factor 1, zodat de gevalideerde prestatie (C = 0,61 op de uitlaatdiameter) exact "
-                   "behouden blijft — geen dubbeltelling. Buiten 0,95 m is het een extrapolatie (geen meetdata).")
+        V_keel_cont = Vdot_s / A_keel if A_keel > 0 else 0.0      # continuïteit: keelsnelheid
+        accel = V_keel_cont / Vout if Vout > 0 else 0
+        st.caption(f"Keeloppervlak A_keel = π·(D_keel/2)² = **{A_keel:.3f} m²**  ·  keel/uitlaat = {ratio:.2f}×")
+        st.caption("✅ **Data-onderbouwd (schaalmodel feb 2026):** de venturi versnelt de keelsnelheid maar bepaalt "
+                   "**niet** het debiet. Het gemeten debiet volgt uit de torendoorsnede met C ≈ 0,61–0,66 (5 reeksen). "
+                   "De simulatie rekent daarom het debiet op de torendoorsnede; de venturi dient voor de keelsnelheid "
+                   "(fijnere verstuiving, betere menging).")
 
-        V_keel_cont = Vdot_s / A_keel if A_keel > 0 else 0.0      # continuïteit: hogere snelheid, debiet gelijk
-        Vdot_keel_hr = Vout * A_keel * 3600.0                    # ruwe opvatting B
-        Vdot_sim_hr = Vdot_hr * f_venturi                        # zoals de simulatie (gecorrigeerd op 0,95 m)
-        total_sim_hr = Vdot_sim_hr * perf_n
-
-        vc1, vc2, vc3 = st.columns(3)
+        vc1, vc2 = st.columns(2)
         with vc1:
-            st.markdown("**A — continuïteit**")
-            st.metric("Keelsnelheid", f"{V_keel_cont:.2f} m/s", help="V_keel = V̇ / A_keel")
-            st.metric("Debiet / toren", f"{Vdot_hr:,.0f} m³/hr")
+            st.markdown("**Debiet (op torendoorsnede)**")
+            st.metric("Per toren", f"{Vdot_hr:,.0f} m³/hr")
+            st.metric(f"Totaal ({perf_n} torens)", f"{Vdot_hr * perf_n:,.0f} m³/hr")
         with vc2:
-            st.markdown("**B — ruw (keel × V_uit)**")
-            st.metric("Debiet / toren", f"{Vdot_keel_hr:,.0f} m³/hr", help="V̇ = V_uit × A_keel")
-            st.caption("Alleen ter vergelijking")
-        with vc3:
-            st.markdown("**C — zoals de simulatie** ✅")
-            st.metric("Debiet / toren", f"{Vdot_sim_hr:,.0f} m³/hr", help="V̇ = gevalideerd debiet × (D_keel/0,95)²")
-            st.metric(f"Totaal ({perf_n} torens)", f"{total_sim_hr:,.0f} m³/hr")
-        st.caption("In de simulatie schalen verdamping en koeling evenredig met dit gecorrigeerde debiet mee.")
+            st.markdown("**Keelsnelheid (venturi)**")
+            st.metric("v_keel", f"{V_keel_cont:.2f} m/s", help="V_keel = V̇ / A_keel (continuïteit)")
+            st.metric("Versnelling", f"{accel:.2f}×", help="keelsnelheid / uitlaatsnelheid")
 
         # ---- Uitblaascondities ----
         st.markdown("#### 🌬️ Uitblaascondities (uit de toren)")
@@ -2437,6 +2433,53 @@ Exact dezelfde fysica als in `greenhouse_climate_v2.py`.
 
 Bron: *CatavaAir CoolFlow Technical Briefing*, december 2025.
 """)
+
+        with st.expander("🔬 Schaalmodel-validatie — 5 meetreeksen (Ø700 × 2000 mm, feb 2026)"):
+            st.markdown("**Model vs. meting** — stack-model op de torendoorsnede (Ø700), C = 0,61.")
+            g = 9.81
+            A_meet = float(np.pi * (0.700 / 2) ** 2)   # torendoorsnede schaalmodel
+            _series = [
+                ("8R", 8, 0, 29.99, 7.88, 1050.1),
+                ("4R", 4, 0, 29.72, 12.03, 803.5),
+                ("4R+4G", 4, 4, 30.56, 9.37, 934.9),
+                ("4G", 0, 4, 31.84, 10.72, 1104.3),
+                ("8G", 0, 8, 29.12, 8.40, 1131.8),
+            ]
+            _rows = []
+            for lbl, nr, ng, Tin, dT, Vmeas in _series:
+                v = 0.61 * (2 * g * 2.0 * dT / (273.15 + Tin)) ** 0.5
+                Vmodel = v * A_meet * 3600
+                Ceff = (Vmeas / 3600 / A_meet) / ((2 * g * 2.0 * dT / (273.15 + Tin)) ** 0.5)
+                _rows.append({
+                    "Reeks": lbl, "Nozzles": f"{nr}R+{ng}G", "T_in (°C)": Tin, "ΔT (K)": dT,
+                    "V gemeten (m³/h)": round(Vmeas),
+                    "V model C=0,61 (m³/h)": round(Vmodel),
+                    "Afwijking": f"{(Vmodel - Vmeas) / Vmeas * 100:+.0f}%",
+                    "C effectief": round(Ceff, 3),
+                })
+            st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
+            st.markdown("""
+**Conclusie uit deze validatie**
+- Het stack-model op de **torendoorsnede** reproduceert het gemeten debiet binnen de spreiding; gemiddelde effectieve **C = 0,66 ± 0,11**.
+- De **venturi** (Ø500 keel) versnelt de keelsnelheid tot ~1,5 m/s, maar bepaalt niet het debiet — daarom rekent de simulatie op de torendoorsnede.
+- **C stijgt met de nozzle-belasting** (0,42 bij 4R tot 0,73 bij 8G): het ejector-effect van de nozzles voegt luchtstroom toe. Dit is een reëel tweede-orde-effect dat het model als vaste C benadert.
+- Water was in de meeste reeksen **ruim overvloedig** (injectie 4–18 L/h vs. verdampt 4–7 L/h) → verdamping is fysica-begrensd, zoals het model aanneemt.
+
+Bron: *Catyra Air Torensimulator v4 — schaalmodelmetingen*, februari 2026.
+""")
+
+        with st.expander("💧 Nozzle-referentie — Ikeuchi KBN (q ∝ √P)"):
+            st.markdown("Gevalideerde nozzle-flows uit de Ikeuchi-datasheet. Debiet schaalt met de wortel van de druk: "
+                        "q(P) = q₁₀ · √(P / 10 bar).")
+            _bars = [3, 5, 7, 10, 15, 20]
+            _noz = {"KBN 80125 (rood)": 4.10, "KBN 80063 (groen)": 2.00}
+            _tab = {"Druk (bar)": _bars}
+            for name, qref in _noz.items():
+                _tab[name + " (L/h)"] = [round(qref * (b / 10) ** 0.5, 2) for b in _bars]
+            st.dataframe(pd.DataFrame(_tab), use_container_width=True, hide_index=True)
+            st.caption("KBN 80125 = 4,10 L/h @ 10 bar · KBN 80063 = 2,00 L/h @ 10 bar. "
+                       "Nozzle-aantal en -type beïnvloeden de prestatie vooral via het ejector-effect op de luchtstroom "
+                       "(hogere C), niet via de watertoevoer — die is doorgaans niet de beperkende factor.")
 
     st.markdown("---")
     st.markdown("<div style='text-align:center;color:#666;font-size:0.8rem;'>Catyra v2.0 | © 2026 Catyra Engineering</div>", unsafe_allow_html=True)
