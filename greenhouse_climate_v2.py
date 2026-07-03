@@ -244,8 +244,11 @@ def calc_tower_performance(T_amb: float, RH_amb: float,
     # Outlet velocity
     V_out = calc_tower_velocity(T_amb, T_out, tower.H_tower, tower.C_discharge)
 
-    # Mass flow rate (venturi-gecorrigeerd effectief oppervlak)
-    m_dot = RHO_AIR * V_out * tower.A_eff  # kg/s
+    # Mass flow rate — debiet op de torendoorsnede (A_bottom).
+    # Gevalideerd op 5 schaalmodel-reeksen (feb 2026): effectieve C = 0.66 ± 0.11 op de
+    # torendoorsnede. De venturi versnelt de keelsnelheid maar bepaalt NIET het debiet,
+    # daarom hier A_bottom en niet A_eff.
+    m_dot = RHO_AIR * V_out * tower.A_bottom  # kg/s
 
     # Volume flow rate
     V_dot = m_dot / RHO_AIR * 3600  # m³/hr
